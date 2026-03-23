@@ -19,13 +19,12 @@ async def create_workout(user_info: dict):
                 exercise["youtube_id"] = video_ids[i] or "dQw4w9WgXcQ"
         return workout_dict
     except Exception as e:
-        raise HTTPException(status_code=500, detail="Error al generar rutina")
+        raise HTTPException(status_code=500, detail=str(e))
 
 @router.post("/analyze-posture")
 async def analyze_pose(data: dict):
     try:
         image_bytes = base64.b64decode(data['image'])
-        result = analyze_posture(image_bytes, data.get('exercise', 'General'))
-        return result
+        return analyze_posture(image_bytes, data.get('exercise', 'General'))
     except Exception as e:
         raise HTTPException(status_code=500, detail=str(e))
