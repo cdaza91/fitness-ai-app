@@ -2,13 +2,11 @@ import bcrypt
 from datetime import datetime, timedelta
 from jose import jwt
 
-# En producción, esto debe ir en tu archivo .env
 SECRET_KEY = "tu_super_secreto_para_jwt_cambialo_despues"
 ALGORITHM = "HS256"
-ACCESS_TOKEN_EXPIRE_MINUTES = 60 * 24 * 7  # El token durará 7 días
+ACCESS_TOKEN_EXPIRE_MINUTES = 30
 
 def verify_password(plain_password: str, hashed_password: str) -> bool:
-    # bcrypt requiere que los strings se conviertan a bytes (encode)
     return bcrypt.checkpw(plain_password.encode('utf-8'), hashed_password.encode('utf-8'))
 
 def get_password_hash(password: str) -> str:
