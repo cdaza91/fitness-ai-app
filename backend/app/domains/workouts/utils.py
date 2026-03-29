@@ -1,21 +1,19 @@
 import google.generativeai as genai
 from sqlalchemy.orm import Session
-
 import logging
 from app.domains.users.models import SupportedExercise
 from app.domains.workouts import youtube_service
 from app.domains.workouts.service import get_best_available_model
-logging.basicConfig(level=logging.INFO)
+
+
 logger = logging.getLogger(__name__)
-
-SILICON_FLOW_KEY = "sk-hcfcvllhwwcsckwjsllqeiwbhxofapcyonlgtbthpjpbqemv"
-
 
 def generate_exercise_assets_with_ai(ex_name: str):
     """
-    Usa IA para definir cómo se mide este ejercicio y genera un video demostrativo.
+    Uses AI to define how an exercise is measured and generates a demonstration video.
     """
-    model = genai.GenerativeModel(get_best_available_model())
+    model_name = get_best_available_model()
+    model = genai.GenerativeModel(model_name)
 
     pose_prompt = f"""
     ROLE: Biomechanics and MediaPipe Pose API Expert.
@@ -36,29 +34,30 @@ def generate_exercise_assets_with_ai(ex_name: str):
         res = model.generate_content(pose_prompt)
         rules_json = res.text.strip()
     except Exception as e:
-        logging.error(f"Error generating pose rules: {e}")
-
+        logger.error(f"Error generating pose rules for {ex_name}: {e}")
 
     video_url = None
     try:
         video_url = youtube_service.get_exercise_video_id(ex_name)
     except Exception as e:
-        logger.error(f"Error Video ({ex_name}): {e}")
+        logger.error(f"Error getting video URL for {ex_name}: {e}")
 
     return rules_json, video_url
 
 
 def enrich_workout_with_posture_check(workout_data: dict, db: Session):
+    """
+    Adds posture checking information and video URLs to the exercises in a workout plan.
+    """
     if not workout_data:
         return None
 
     supported_records = db.query(SupportedExercise).filter(SupportedExercise.is_active == True).all()
-
     supported_map = {rec.name.lower(): rec for rec in supported_records}
 
     for day in workout_data.get("daily_routines", []):
         for ex in day.get("exercises", []):
-            ex_name = ex["name"].lower()
+            ex_name = ex.get("name", "").lower()
             record = supported_map.get(ex_name)
 
             if record:

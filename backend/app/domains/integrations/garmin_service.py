@@ -1,6 +1,7 @@
 import os
 import json
 import logging
+from typing import Dict, Any, List, Optional
 from garminconnect import Garmin
 from datetime import date
 
@@ -8,19 +9,26 @@ from garminconnect.workout import (
     RunningWorkout,
     create_warmup_step,
     create_interval_step,
-    create_cooldown_step, WorkoutSegment, TargetType,
+    create_cooldown_step, 
+    WorkoutSegment,
 )
 
 from garth.exc import GarthHTTPError
 from sqlalchemy.orm import Session
+from app.domains.users.models import Activity, HealthMetric, Workout
 
-from app.domains.users.models import Activity, HealthMetric
+# Configure logging
+logger = logging.getLogger(__name__)
 
+# Constants for Garmin Target Types
+TARGET_TYPE_NO_TARGET = {"targetTypeId": 1, "targetTypeKey": "no.target"}
+TARGET_TYPE_PACE_ZONE = {"targetTypeId": 4, "targetTypeKey": "pace.zone"}
 
-def sync_garmin_data(email: str, password: str):
-    """Autentica y extrae métricas de salud y actividades de Garmin."""
+def get_garmin_client(email: str, password: str) -> Garmin:
+    """Authenticates and returns a Garmin client with token persistence."""
     safe_email = email.replace("@", "_").replace(".", "_")
     token_dir = f"./.garmin_tokens_{safe_email}"
+    
     try:
         client = Garmin(email, password)
         if os.path.exists(token_dir):
@@ -28,8 +36,18 @@ def sync_garmin_data(email: str, password: str):
         else:
             client.login()
             client.garth.dump(token_dir)
+        return client
+    except Exception as e:
+        logger.error(f"Garmin Authentication Error: {e}")
+        raise ValueError(f"Fallo de inicio de sesión en Garmin: {str(e)}")
 
+
+def sync_garmin_data(email: str, password: str) -> Dict[str, Any]:
+    """Syncs health metrics and recent activities from Garmin."""
+    try:
+        client = get_garmin_client(email, password)
         today = date.today().isoformat()
+        
         return {
             "status": "success",
             "date": today,
@@ -39,44 +57,51 @@ def sync_garmin_data(email: str, password: str):
             "client": client
         }
     except Exception as e:
-        logging.error(f"Garmin Sync Error: {e}")
-        raise Exception(f"Fallo de inicio de sesión en Garmin: {str(e)}")
+        logger.error(f"Garmin Sync Error: {e}")
+        raise
 
 
-def get_grouped_garmin_context(user_id: int, db: Session):
-    """Genera un resumen de historial para que el Prompt de la IA sea más inteligente."""
-    activities = db.query(Activity).filter(Activity.user_id == user_id).order_by(Activity.date.desc()).limit(15).all()
-
-    history_summary = []
-    for a in activities:
-        dist = f"{a.distance_meters / 1000:.1f}km" if a.distance_meters else ""
-        history_summary.append(f"{a.date.date()}: {a.activity_type} {dist}")
-
-    latest_metric = db.query(HealthMetric).filter(HealthMetric.user_id == user_id).order_by(
-        HealthMetric.date.desc()).first()
-
-    return {
-        "recent_history": history_summary,
-        "current_weight": latest_metric.weight if latest_metric else "Unknown"
-    }
-
-def pace_to_mps(pace_str: str):
+def pace_to_mps(pace_str: Optional[str]) -> Optional[float]:
     """Converts MM:SS min/km string to meters per second."""
+    if not pace_str or ":" not in pace_str:
+        return None
     try:
-        if not pace_str or ":" not in pace_str:
-            return None
         minutes, seconds = map(int, pace_str.split(":"))
         total_seconds = (minutes * 60) + seconds
         if total_seconds == 0:
             return None
-        # Speed (mps) = Distance (1000m) / Time (seconds)
         return 1000 / total_seconds
-    except Exception as e:
-        logging.error(f"Error converting pace {pace_str}: {e}")
+    except (ValueError, ZeroDivisionError) as e:
+        logger.warning(f"Error converting pace {pace_str}: {e}")
         return None
 
 
-def push_specific_workout_day(client, workout_model, day_index: int):
+def _create_running_step(ex: Dict[str, Any], step_order: int) -> Any:
+    """Creates a Garmin workout step for a running exercise."""
+    duration = float(ex.get("duration_s", 60))
+    ex_type = ex.get("type", "active").lower()
+    
+    low_speed = pace_to_mps(ex.get("target_min"))
+    high_speed = pace_to_mps(ex.get("target_max"))
+    
+    target_type = TARGET_TYPE_NO_TARGET
+    if low_speed and high_speed:
+        target_type = {
+            **TARGET_TYPE_PACE_ZONE,
+            "targetValueOne": low_speed,
+            "targetValueTwo": high_speed
+        }
+
+    if "warmup" in ex_type:
+        return create_warmup_step(duration, step_order=step_order, target_type=target_type)
+    elif "cooldown" in ex_type:
+        return create_cooldown_step(duration, step_order=step_order, target_type=target_type)
+    else:
+        return create_interval_step(duration, step_order=step_order, target_type=target_type)
+
+
+def push_specific_workout_day(client: Garmin, workout_model: Workout, day_index: int) -> bool:
+    """Pushes a specific day of a workout plan to the Garmin calendar."""
     try:
         data = workout_model.json_data
         if isinstance(data, str):
@@ -84,71 +109,65 @@ def push_specific_workout_day(client, workout_model, day_index: int):
 
         routines = data.get("daily_routines", [])
         if day_index >= len(routines):
+            logger.warning(f"Day index {day_index} out of range for workout {workout_model.id}")
             return False
 
         routine = routines[day_index]
-        today_date = date.today()
-
+        training_type = workout_model.training_type or "strength"
+        
         garmin_steps = []
         total_duration = 0
+        
         for i, ex in enumerate(routine.get("exercises", [])):
-            duration = float(ex.get("duration_s", 60))
-            total_duration += duration
-            description = (ex.get("instructions", "") or "")[:50]
-
-            low_speed = pace_to_mps(ex.get("target_min"))
-            high_speed = pace_to_mps(ex.get("target_max"))
-
-            ex_type = ex.get("type", "active").lower()
-            if "warmup" in ex_type:
-                step = create_warmup_step(duration, step_order=i, target_type={
-        "targetTypeId": 1,
-        "targetTypeKey": "no.target"
-    })
-            elif "cooldown" in ex_type:
-                step = create_cooldown_step(duration, step_order=i,target_type={
-        "targetTypeId": 4,
-        "targetTypeKey": "pace.zone",
-                    "targetValueOne": low_speed,
-                    "targetValueTwo": high_speed
-
-    },)
+            if training_type == "running":
+                step = _create_running_step(ex, i)
+                total_duration += float(ex.get("duration_s", 60))
+                garmin_steps.append(step)
             else:
-                step = create_interval_step(duration, step_order=i, target_type={
-        "targetTypeId": 4,
-        "targetTypeKey": "pace.zone",
-                    "targetValueOne": low_speed,
-                    "targetValueTwo": high_speed
+                # Generic step for strength/others
+                duration = float(ex.get("duration_s", 60)) if "duration_s" in ex else 60
+                total_duration += duration
+                step = create_interval_step(duration, step_order=i, target_type=TARGET_TYPE_NO_TARGET)
+                garmin_steps.append(step)
 
-    })
-
-            garmin_steps.append(step)
+        sport_key = "running" if training_type == "running" else "strength"
+        workout_name = f"Fit_{training_type[:4]}_{day_index}"[:15]
+        
         segment = WorkoutSegment(
             segmentOrder=1,
-            sportType={"sportTypeKey": "running"},
+            sportType={"sportTypeKey": sport_key},
             workoutSteps=garmin_steps
         )
 
-        workout = RunningWorkout(
-            workoutName=f"FitCheck_{day_index}"[:15],
-            estimatedDurationInSecs=total_duration,
-            workoutSegments=[segment]
-        )
+        if training_type == "running":
+            garmin_workout = RunningWorkout(
+                workoutName=workout_name,
+                estimatedDurationInSecs=total_duration,
+                workoutSegments=[segment]
+            )
+            # RunningWorkout has a as_dict method that upload_workout expects
+            upload_response = client.upload_workout(garmin_workout.as_dict())
+        else:
+            # Manually construct the workout dictionary for strength
+            workout_dict = {
+                "workoutName": workout_name,
+                "sportType": {"sportTypeKey": sport_key},
+                "workoutSegments": [segment.as_dict() if hasattr(segment, 'as_dict') else segment]
+            }
+            upload_response = client.upload_workout(workout_dict)
 
-        upload_response = client.upload_running_workout(workout)
         new_workout_id = upload_response.get("workoutId")
-
         if new_workout_id:
-            client.schedule_workout(new_workout_id, today_date.isoformat())
+            client.schedule_workout(new_workout_id, date.today().isoformat())
+            logger.info(f"Successfully scheduled Garmin workout {new_workout_id} for today")
             return True
 
         return False
+
     except GarthHTTPError as e:
-        if hasattr(e, 'error') and hasattr(e.error, 'response'):
-            logging.error(f"Garmin API Detail: {e.error.response.text}")
-        else:
-            logging.error(f"Push Workout Error: {e}")
+        msg = e.error.response.text if hasattr(e, 'error') and hasattr(e.error, 'response') else str(e)
+        logger.error(f"Garmin API Error: {msg}")
         return False
     except Exception as e:
-        logging.error(f"Push Workout Error: {str(e)}")
+        logger.exception(f"Unexpected error pushing workout to Garmin: {e}")
         return False

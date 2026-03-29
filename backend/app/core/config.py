@@ -1,12 +1,30 @@
 from pydantic_settings import BaseSettings, SettingsConfigDict
-
+from typing import Optional, List
 
 class Settings(BaseSettings):
-    GEMINI_API_KEY: str
-    YOUTUBE_API_KEY: str
+    model_config = SettingsConfigDict(env_file='.env', extra='ignore')
 
-    # Esto busca automáticamente un archivo .env
-    model_config = SettingsConfigDict(env_file=".env")
+    # Core settings
+    PROJECT_NAME: str = "FitCheck AI API"
+    API_V1_STR: str = "/api/v1"
 
+    # Database settings
+    DATABASE_URL: str = "sqlite:///./fitcheck.db"
+
+    # Security settings
+    SECRET_KEY: str = "dev_secret_key_change_me_in_production"
+    ALGORITHM: str = "HS256"
+    ACCESS_TOKEN_EXPIRE_MINUTES: int = 30
+
+    # AI Integration settings
+    GEMINI_API_KEY: Optional[str] = None
+    YOUTUBE_API_KEY: Optional[str] = None
+
+    # Task scheduler settings
+    POPULATE_EXERCISES_INTERVAL_MINUTES: int = 600  # 10 hours
+    GARMIN_SYNC_INTERVAL_MINUTES: int = 1200      # 20 hours
+
+    # CORS settings
+    CORS_ORIGINS: List[str] = ["*"] # Adjust in production
 
 settings = Settings()

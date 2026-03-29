@@ -1,37 +1,54 @@
+import logging
+from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
+from sqladmin import Admin, ModelView
+
 from app.api.v1.api import api_router
 from app.core.db import engine, Base
-from sqladmin import Admin, ModelView
-from app.domains.users.models import SupportedExercise, User, Workout, HealthMetric, Activity
+from app.core.config import settings
 from app.core.tasks import scheduler
+from app.core.logging_config import setup_logging
+from app.domains.users.models import SupportedExercise, User, Workout, HealthMetric, Activity
 
-app = FastAPI(title="FitCheck AI API")
-# 1. Initialize Tables
+# 1. Setup Logging
+setup_logging()
+logger = logging.getLogger(__name__)
+
+# 2. Database Initialization
 Base.metadata.create_all(bind=engine)
 
-# 2. Background Task
-
-@app.on_event("startup")
-async def startup_event():
+# 3. Lifespan for background tasks
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    """Manages the startup and shutdown life of the application."""
+    logger.info("Starting up FitCheck AI API...")
     if not scheduler.running:
         scheduler.start()
+    yield
+    logger.info("Shutting down FitCheck AI API...")
+    if scheduler.running:
+        scheduler.shutdown()
 
+# 4. FastAPI App Setup
+app = FastAPI(
+    title=settings.PROJECT_NAME,
+    lifespan=lifespan
+)
 
-# 3. FastAPI App Setup
-
-
+# 5. Middleware
 app.add_middleware(
     CORSMiddleware,
-    allow_origins=["*"],
+    allow_origins=settings.CORS_ORIGINS,
     allow_credentials=True,
     allow_methods=["*"],
     allow_headers=["*"],
 )
 
-app.include_router(api_router, prefix="/api/v1")
+# 6. Include API Routers
+app.include_router(api_router, prefix=settings.API_V1_STR)
 
-# 4. Correct Admin Views (Fixed Syntax)
+# 7. Admin Views configuration
 admin = Admin(app, engine)
 
 class UserAdmin(ModelView, model=User):
@@ -54,7 +71,7 @@ class SupportedExerciseAdmin(ModelView, model=SupportedExercise):
     column_list = [SupportedExercise.id, SupportedExercise.name, SupportedExercise.is_active]
     icon = "fa-solid fa-list-check"
 
-# Register the views correctly
+# Register admin views
 admin.add_view(UserAdmin)
 admin.add_view(WorkoutAdmin)
 admin.add_view(ActivityAdmin)
