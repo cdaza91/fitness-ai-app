@@ -9,7 +9,7 @@ from app.core.db import engine, Base
 from app.core.config import settings
 from app.core.tasks import scheduler
 from app.core.logging_config import setup_logging
-from app.domains.users.models import SupportedExercise, User, Workout, HealthMetric, Activity
+from app.domains.users.models import SupportedExercise, User, WorkoutPlan, WorkoutDay, HealthMetric, Activity
 
 # 1. Setup Logging
 setup_logging()
@@ -55,9 +55,13 @@ class UserAdmin(ModelView, model=User):
     column_list = [User.id, User.email, User.primary_goal]
     icon = "fa-solid fa-user"
 
-class WorkoutAdmin(ModelView, model=Workout):
-    column_list = [Workout.id, Workout.user_id, Workout.title, Workout.created_at, Workout.training_type]
+class WorkoutPlanAdmin(ModelView, model=WorkoutPlan):
+    column_list = [WorkoutPlan.id, WorkoutPlan.user_id, WorkoutPlan.title, WorkoutPlan.created_at, WorkoutPlan.training_type]
     icon = "fa-solid fa-calendar-check"
+
+class WorkoutDayAdmin(ModelView, model=WorkoutDay):
+    column_list = [WorkoutDay.id, WorkoutDay.workout_plan_id, WorkoutDay.day_index, WorkoutDay.is_completed]
+    icon = "fa-solid fa-calendar-day"
 
 class ActivityAdmin(ModelView, model=Activity):
     column_list = [Activity.id, Activity.user_id, Activity.name, Activity.activity_type, Activity.date]
@@ -73,7 +77,8 @@ class SupportedExerciseAdmin(ModelView, model=SupportedExercise):
 
 # Register admin views
 admin.add_view(UserAdmin)
-admin.add_view(WorkoutAdmin)
+admin.add_view(WorkoutPlanAdmin)
+admin.add_view(WorkoutDayAdmin)
 admin.add_view(ActivityAdmin)
 admin.add_view(HealthMetricAdmin)
 admin.add_view(SupportedExerciseAdmin)

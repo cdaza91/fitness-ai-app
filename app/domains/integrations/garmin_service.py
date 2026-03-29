@@ -3,7 +3,9 @@ import json
 import logging
 from typing import Dict, Any, List, Optional
 from garminconnect import Garmin
-from datetime import date
+from datetime import date, timedelta
+from sqlalchemy.orm import Session
+from app.core.db import SessionLocal
 
 from garminconnect.workout import (
     RunningWorkout,
@@ -14,8 +16,7 @@ from garminconnect.workout import (
 )
 
 from garth.exc import GarthHTTPError
-from sqlalchemy.orm import Session
-from app.domains.users.models import Activity, HealthMetric, Workout
+from app.domains.users.models import Activity, HealthMetric, WorkoutPlan, WorkoutDay, User
 
 # Configure logging
 logger = logging.getLogger(__name__)
@@ -43,18 +44,75 @@ def get_garmin_client(email: str, password: str) -> Garmin:
 
 
 def sync_garmin_data(email: str, password: str) -> Dict[str, Any]:
-    """Syncs health metrics and recent activities from Garmin."""
+    """Syncs health metrics and recent activities from Garmin and saves to DB."""
     try:
         client = get_garmin_client(email, password)
-        today = date.today().isoformat()
+        today = date.today()
+        db = SessionLocal()
+        user = db.query(User).filter(User.garmin_email == email).first()
+        
+        if not user:
+            db.close()
+            return {"status": "error", "message": "User not found"}
+
+        # 1. Sync Health Metrics (Last 7 days to be safe)
+        for i in range(7):
+            curr_date = today - timedelta(days=i)
+            curr_date_str = curr_date.isoformat()
+            
+            stats = client.get_stats(curr_date_str)
+            body = client.get_body_composition(curr_date_str)
+            sleep = client.get_sleep_data(curr_date_str)
+
+            # Update or create HealthMetric
+            metric = db.query(HealthMetric).filter(
+                HealthMetric.user_id == user.id,
+                HealthMetric.date == curr_date
+            ).first()
+            
+            if not metric:
+                metric = HealthMetric(user_id=user.id, date=curr_date, source="garmin")
+                db.add(metric)
+            
+            # Extract data safely
+            metric.resting_heart_rate = stats.get("restingHeartRate")
+            metric.steps = stats.get("totalSteps")
+            
+            if body and "totalWeight" in body:
+                metric.weight_kg = body["totalWeight"] / 1000.0 if body["totalWeight"] > 1000 else body["totalWeight"]
+            
+            if sleep and "dailySleepDTO" in sleep:
+                sleep_dto = sleep["dailySleepDTO"]
+                metric.sleep_hours = sleep_dto.get("sleepTimeSeconds", 0) / 3600.0
+                metric.sleep_score = sleep_dto.get("sleepScore")
+
+        # 2. Sync Activities
+        activities = client.get_activities(0, 10)
+        for act in activities:
+            external_id = str(act["activityId"])
+            existing = db.query(Activity).filter(Activity.external_id == external_id).first()
+            if not existing:
+                new_act = Activity(
+                    user_id=user.id,
+                    external_id=external_id,
+                    source="garmin",
+                    activity_type=act.get("activityType", {}).get("typeKey"),
+                    name=act.get("activityName"),
+                    date=datetime.fromisoformat(act["startTimeLocal"].replace(" ", "T")),
+                    distance_meters=act.get("distance"),
+                    duration_seconds=act.get("duration"),
+                    average_heart_rate=act.get("averageHR"),
+                    calories=act.get("calories"),
+                    json_data=json.dumps(act)
+                )
+                db.add(new_act)
+
+        db.commit()
+        db.close()
         
         return {
             "status": "success",
-            "date": today,
-            "daily_stats": client.get_stats(today),
-            "body_composition": client.get_body_composition(today),
-            "recent_activities": client.get_activities(0, 10),
-            "client": client
+            "message": "Data synced from Garmin"
         }
     except Exception as e:
         logger.error(f"Garmin Sync Error: {e}")
@@ -100,7 +158,7 @@ def _create_running_step(ex: Dict[str, Any], step_order: int) -> Any:
         return create_interval_step(duration, step_order=step_order, target_type=target_type)
 
 
-def push_specific_workout_day(client: Garmin, workout_model: Workout, day_index: int) -> bool:
+def push_specific_workout_day(client: Garmin, workout_model: WorkoutPlan, day_index: int) -> bool:
     """Pushes a specific day of a workout plan to the Garmin calendar."""
     try:
         data = workout_model.json_data
@@ -108,11 +166,12 @@ def push_specific_workout_day(client: Garmin, workout_model: Workout, day_index:
             data = json.loads(data)
 
         routines = data.get("daily_routines", [])
-        if day_index >= len(routines):
-            logger.warning(f"Day index {day_index} out of range for workout {workout_model.id}")
+        routine = next((r for r in routines if r.get("day") == day_index), None)
+        
+        if not routine:
+            logger.warning(f"Day {day_index} not found in workout plan {workout_model.id}")
             return False
 
-        routine = routines[day_index]
         training_type = workout_model.training_type or "strength"
         
         garmin_steps = []
@@ -145,10 +204,8 @@ def push_specific_workout_day(client: Garmin, workout_model: Workout, day_index:
                 estimatedDurationInSecs=total_duration,
                 workoutSegments=[segment]
             )
-            # RunningWorkout has a as_dict method that upload_workout expects
             upload_response = client.upload_workout(garmin_workout.as_dict())
         else:
-            # Manually construct the workout dictionary for strength
             workout_dict = {
                 "workoutName": workout_name,
                 "sportType": {"sportTypeKey": sport_key},

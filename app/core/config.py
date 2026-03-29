@@ -20,6 +20,10 @@ class Settings(BaseSettings):
     GEMINI_API_KEY: Optional[str] = None
     YOUTUBE_API_KEY: Optional[str] = None
 
+    # Google OAuth2 Credentials
+    GOOGLE_CLIENT_ID: Optional[str] = None
+    GOOGLE_CLIENT_SECRET: Optional[str] = None
+
     # Task scheduler settings
     POPULATE_EXERCISES_INTERVAL_MINUTES: int = 600  # 10 hours
     GARMIN_SYNC_INTERVAL_MINUTES: int = 1200      # 20 hours

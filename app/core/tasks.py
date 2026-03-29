@@ -5,7 +5,7 @@ from apscheduler.schedulers.background import BackgroundScheduler
 from app.core.db import SessionLocal
 from app.core.config import settings
 from app.domains.integrations.garmin_service import sync_garmin_data
-from app.domains.users.models import Workout, SupportedExercise, User
+from app.domains.users.models import WorkoutPlan, SupportedExercise, User
 from app.domains.workouts.utils import generate_exercise_assets_with_ai
 
 # Configure logging
@@ -33,7 +33,7 @@ def populate_missing_exercises():
     with db_session() as db:
         try:
             # 1. Gather all exercise names used in current workouts
-            workouts = db.query(Workout).all()
+            workouts = db.query(WorkoutPlan).all()
             all_exercise_names = set()
             for w in workouts:
                 try:

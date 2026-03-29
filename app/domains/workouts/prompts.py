@@ -53,3 +53,34 @@ JSON OUTPUT FORMAT:
   ]
 }}
 """
+
+ADAPTIVE_REPLANNING_PROMPT = """
+ROLE: Adaptive AI Fitness Coach.
+TASK: Update the user's workout plan for the NEXT week based on their performance in the CURRENT week.
+
+USER CONTEXT:
+- Training Type: {training_type}
+- Original Goal: {primary_goal}
+- Original Plan: {original_plan}
+
+PERFORMANCE DATA (Last Week):
+- Completed Sessions: {completed_sessions}
+- Missed Sessions: {missed_sessions}
+- Performance Metrics (Weights/Paces): {performance_metrics}
+- Tracked Activities (GPS/HR data): {activities}
+
+HEALTH & WELLNESS METRICS (Last Week):
+- Daily Metrics (Weight, HR, Sleep): {health_metrics}
+
+ADAPTATION RULES:
+1. OVERLOAD: If the user completed all sessions and weights/paces were hit easily, increase intensity (weight +2.5-5% or pace +2%) or volume (+1 set or +5% distance).
+2. STAGNATION: If sessions were completed but performance was stagnant, keep the current level but change exercise variation or focus on recovery.
+3. RECOVERY/DELOAD: If >30% of sessions were missed OR if health metrics show high fatigue (sleep score < 60 multiple days, or high RHR), decrease intensity/volume for the next week.
+4. BODY COMP: If weight/body fat is decreasing, maintain intensity to preserve muscle. If increasing, adjust volume to boost caloric expenditure.
+5. CONSISTENCY: Ensure the plan follows the same structure as the original but with the adjusted values.
+
+STRICT RULES:
+- "day" MUST BE NUMERIC: 0-6 (Mon-Sun).
+- Maintain the same JSON schema as the original plan.
+- The output MUST be a full plan for 7 days.
+"""

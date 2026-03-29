@@ -25,6 +25,10 @@ class User(Base):
     garmin_email = Column(String(255), nullable=True)
     garmin_password = Column(String(255), nullable=True)
 
+    # Google Fit Integration
+    google_fit_access_token = Column(Text, nullable=True)
+    google_fit_refresh_token = Column(Text, nullable=True)
+
     # Fitness Preferences & Goals
     fitness_level = Column(String(50), nullable=True)  # beginner, intermediate, advanced
     experience_desc = Column(Text, nullable=True)
@@ -55,7 +59,7 @@ class User(Base):
     cross_training_pref = Column(Boolean, default=True)
 
     # Relationships
-    workouts = relationship("Workout", back_populates="user", cascade="all, delete-orphan")
+    workout_plans = relationship("WorkoutPlan", back_populates="user", cascade="all, delete-orphan")
     health_metrics = relationship("HealthMetric", back_populates="user", cascade="all, delete-orphan")
     activities = relationship("Activity", back_populates="user", cascade="all, delete-orphan")
 
@@ -63,11 +67,11 @@ class User(Base):
         return f"<User(email='{self.email}', goal='{self.primary_goal}')>"
 
 
-class Workout(Base):
+class WorkoutPlan(Base):
     """
     Represents a specific workout plan generated for a user.
     """
-    __tablename__ = "workouts"
+    __tablename__ = "workout_plans"
     
     id = Column(Integer, primary_key=True, index=True)
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
@@ -76,10 +80,40 @@ class Workout(Base):
     created_at = Column(DateTime, default=datetime.utcnow)
     training_type = Column(String(50), nullable=True)
 
-    user = relationship("User", back_populates="workouts")
+    user = relationship("User", back_populates="workout_plans")
+    days = relationship("WorkoutDay", back_populates="workout_plan", cascade="all, delete-orphan")
 
     def __repr__(self):
-        return f"<Workout(title='{self.title}', user_id={self.user_id})>"
+        return f"<WorkoutPlan(title='{self.title}', user_id={self.user_id})>"
+
+
+class WorkoutDay(Base):
+    """
+    Represents a specific day/session within a workout plan.
+    Includes status, completion info, and results like weights used.
+    """
+    __tablename__ = "workout_days"
+    
+    id = Column(Integer, primary_key=True, index=True)
+    workout_plan_id = Column(Integer, ForeignKey("workout_plans.id"), index=True, nullable=False)
+    day_index = Column(Integer, nullable=False)  # 1-based index or day number in the plan
+    date = Column(Date, nullable=True)
+    is_completed = Column(Boolean, default=False)
+    
+    # Link to external activity (e.g., from Garmin) if matched
+    activity_id = Column(Integer, ForeignKey("activities.id"), nullable=True)
+    
+    # Full information of the workout for this specific day (snapshot of the routine)
+    workout_data = Column(Text, nullable=True)  # JSON field
+    
+    # Performance metrics, specifically weights used in strength training
+    performance_data = Column(Text, nullable=True)  # JSON field: e.g., {"exercise_id": {"weight": 20, "reps": 10}}
+
+    workout_plan = relationship("WorkoutPlan", back_populates="days")
+    activity = relationship("Activity")
+
+    def __repr__(self):
+        return f"<WorkoutDay(plan_id={self.workout_plan_id}, day={self.day_index}, completed={self.is_completed})>"
 
 
 class HealthMetric(Base):
@@ -92,9 +126,13 @@ class HealthMetric(Base):
     user_id = Column(Integer, ForeignKey("users.id"), index=True, nullable=False)
     date = Column(Date, default=lambda: datetime.utcnow().date(), index=True)
     weight_kg = Column(Float, nullable=True)
+    body_fat_pct = Column(Float, nullable=True)
+    muscle_mass_kg = Column(Float, nullable=True)
     resting_heart_rate = Column(Integer, nullable=True)
     steps = Column(Integer, nullable=True)
-    source = Column(String(50), default="garmin")
+    sleep_hours = Column(Float, nullable=True)
+    sleep_score = Column(Integer, nullable=True)
+    source = Column(String(50), default="garmin")  # garmin, google_fit, manual
 
     user = relationship("User", back_populates="health_metrics")
 
@@ -118,6 +156,8 @@ class Activity(Base):
     distance_meters = Column(Float, nullable=True)
     duration_seconds = Column(Float, nullable=True)
     average_heart_rate = Column(Integer, nullable=True)
+    calories = Column(Float, nullable=True)
+    json_data = Column(Text, nullable=True) # Full detail from source
 
     user = relationship("User", back_populates="activities")
 

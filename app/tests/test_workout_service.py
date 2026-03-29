@@ -1,7 +1,12 @@
 import pytest
 import json
 from unittest.mock import MagicMock, patch
-from app.domains.workouts.service import generate_running_workout, generate_strength_workout, _extract_json_from_response
+from app.domains.workouts.service import (
+    generate_running_workout, 
+    generate_strength_workout, 
+    _extract_json_from_response,
+    generate_adaptive_workout_update
+)
 from app.domains.users.models import User
 
 @pytest.fixture
@@ -26,7 +31,6 @@ def test_extract_json_from_response_valid():
 
 def test_extract_json_from_response_invalid():
     raw_response = "Not a JSON at all"
-    # The refactored version raises ValueError with a custom message
     with pytest.raises(ValueError, match="Invalid AI response format"):
         _extract_json_from_response(raw_response)
 
@@ -55,3 +59,28 @@ def test_generate_strength_workout(mock_get_ai_model, mock_user):
     prompt_used = mock_model.generate_content.call_args[0][0]
     assert "Expert Hypertrophy & Strength Coach" in prompt_used
     assert "75.0kg" in prompt_used
+
+@patch("app.domains.workouts.service.get_ai_model")
+def test_generate_adaptive_workout_update(mock_get_ai_model, mock_user):
+    mock_model = mock_get_ai_model.return_value
+    mock_model.generate_content.return_value.text = '{"title": "Adapted Plan", "daily_routines": []}'
+    
+    result = generate_adaptive_workout_update(
+        user=mock_user,
+        training_type="strength",
+        original_plan_json='{"title": "Old Plan", "daily_routines": []}',
+        completed_sessions=[{"day": 0}],
+        missed_sessions=[{"day": 2}],
+        performance_metrics={"Bench Press": {"weight": 60}},
+        health_metrics=[{"date": "2024-01-01", "sleep_score": 85}],
+        activities=[{"name": "Morning Run", "avg_hr": 140}]
+    )
+    
+    assert result["title"] == "Adapted Plan"
+    mock_model.generate_content.assert_called_once()
+    prompt_used = mock_model.generate_content.call_args[0][0]
+    assert "Adaptive AI Fitness Coach" in prompt_used
+    assert "performance data" in prompt_used.lower()
+    assert "health & wellness metrics" in prompt_used.lower()
+    assert "140" in prompt_used  # Activities HR
+    assert "85" in prompt_used   # Sleep score

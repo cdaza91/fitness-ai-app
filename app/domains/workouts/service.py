@@ -2,7 +2,7 @@ import os
 import json
 import re
 import logging
-from typing import Dict, Any, Optional, List
+from typing import Dict, Any, List, Optional
 from pathlib import Path
 import google.generativeai as genai
 from dotenv import load_dotenv
@@ -67,50 +67,91 @@ WORKOUT_SCHEMA = {
 
 _model = None
 
-def get_best_available_model() -> str:
-    """Returns the name of the best available generative model (prefers 'flash')."""
+def get_best_available_model():
+    """Dynamically finds the best model available from the API and its capabilities."""
+    api_key = os.getenv("GEMINI_API_KEY")
+    if not api_key:
+        logger.error("GEMINI_API_KEY not found in environment")
+        raise ValueError("GEMINI_API_KEY not found in environment")
+    
+    genai.configure(api_key=api_key)
+    
     try:
-        available_models = [m.name for m in genai.list_models() if 'generateContent' in m.supported_generation_methods]
-        return next((m for m in available_models if 'flash' in m), available_models[0])
+        available_models = list(genai.list_models())
+        supported_models = [m for m in available_models if 'generateContent' in m.supported_generation_methods]
+        logger.info(available_models)
+        logger.info(supported_models)
+        # Priority map for selection
+        priority_keywords = ['gemini-1.5-flash', 'gemini-1.5-pro', 'gemini-1.0-pro', 'gemini-pro']
+        logger.info(priority_keywords)
+        selected_model = None
+        for keyword in priority_keywords:
+            selected_model = next((m for m in supported_models if keyword in m.name), None)
+            if selected_model:
+                break
+        
+        if not selected_model:
+            selected_model = supported_models[0] if supported_models else None
+            
+        if not selected_model:
+            raise ValueError("No suitable Gemini model found via API")
+            
+        logger.info(f"Dynamically selected model: {selected_model.name}")
+        return selected_model
     except Exception as e:
         logger.error(f"Error listing AI models: {e}")
-        return "models/gemini-1.5-flash"  # Fallback
+        # Return a dummy model object with at least a name for fallback
+        class DummyModel:
+            name = "models/gemini-pro"
+        return DummyModel()
 
 def get_ai_model():
-    """Lazily initializes the Google Generative AI model."""
+    """Lazily initializes the Google Generative AI model with dynamic capability checking."""
     global _model
     if _model is None:
-        api_key = os.getenv("GEMINI_API_KEY")
-        if not api_key:
-            logger.error("GEMINI_API_KEY not found in environment")
-            raise ValueError("GEMINI_API_KEY not found in environment")
-        
-        genai.configure(api_key=api_key)
-        
         try:
-            model_name = get_best_available_model()
+            model_info = get_best_available_model()
+            model_name = model_info.name
+            
+            # Capability checking: Gemini 1.5+ usually supports JSON schema
+            # We also check for 'flash' or 'pro' and version numbers
+            supports_schema = any(v in model_name for v in ["1.5", "2.0"])
+            
+            generation_config = {"temperature": 0.7}
+            
+            if supports_schema:
+                generation_config["response_mime_type"] = "application/json"
+                generation_config["response_schema"] = WORKOUT_SCHEMA
+                logger.info(f"Model {model_name} supports schema-based generation.")
+            else:
+                logger.info(f"Model {model_name} does not support schema-based generation, using prompt-based extraction.")
+
             _model = genai.GenerativeModel(
-                model_name,
-                generation_config=genai.GenerationConfig(
-                    response_mime_type="application/json",
-                    response_schema=WORKOUT_SCHEMA,
-                    temperature=0.7
-                )
+                model_name=model_name,
+                generation_config=genai.GenerationConfig(**generation_config)
             )
-            logger.info(f"Initialized AI model: {model_name}")
+            
         except Exception as e:
             logger.error(f"Failed to initialize AI model: {e}")
-            raise
-
+            # Ultra-safe fallback
+            _model = genai.GenerativeModel("models/gemini-pro")
+            
     return _model
 
 
 def _extract_json_from_response(response_text: str) -> Dict[str, Any]:
     """Extracts JSON content from the AI response string."""
     try:
-        json_match = re.search(r'\{.*\}', response_text, re.DOTALL)
+        # Try to find JSON block if AI wrapped it in markdown
+        json_match = re.search(r'```json\s*(\{.*?\})\s*```', response_text, re.DOTALL)
+        if json_match:
+            return json.loads(json_match.group(1))
+            
+        # Try generic curly brace match
+        json_match = re.search(r'(\{.*\})', response_text, re.DOTALL)
         if json_match:
             return json.loads(json_match.group())
+
         return json.loads(response_text)
     except json.JSONDecodeError as e:
         logger.error(f"Failed to decode AI response as JSON: {e}. Raw text: {response_text}")
@@ -156,3 +197,32 @@ def generate_workout(user: User, training_type: str) -> Dict[str, Any]:
     else:
         # Default to strength for other types
         return generate_strength_workout(user)
+
+
+def generate_adaptive_workout_update(
+    user: User, 
+    training_type: str,
+    original_plan_json: str,
+    completed_sessions: List[Dict[str, Any]],
+    missed_sessions: List[Dict[str, Any]],
+    performance_metrics: Dict[str, Any],
+    health_metrics: List[Dict[str, Any]],
+    activities: List[Dict[str, Any]]
+) -> Dict[str, Any]:
+    """Generates an updated workout plan based on the user's performance and metrics."""
+    logger.info(f"Generating adaptive workout update for user: {user.email}")
+    
+    prompt = prompts.ADAPTIVE_REPLANNING_PROMPT.format(
+        training_type=training_type,
+        primary_goal=user.primary_goal or "Fitness",
+        original_plan=original_plan_json,
+        completed_sessions=json.dumps(completed_sessions),
+        missed_sessions=json.dumps(missed_sessions),
+        performance_metrics=json.dumps(performance_metrics),
+        health_metrics=json.dumps(health_metrics),
+        activities=json.dumps(activities)
+    )
+    
+    model = get_ai_model()
+    response = model.generate_content(prompt)
+    return _extract_json_from_response(response.text)

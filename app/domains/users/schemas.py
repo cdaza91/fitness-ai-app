@@ -1,5 +1,7 @@
 from pydantic import BaseModel, EmailStr, SecretStr, Field
 from typing import Optional, Dict, Any, List
+from datetime import date
+from app.domains.workouts.schemas import WorkoutPlanResponse
 
 class UserCreate(BaseModel):
     email: EmailStr
@@ -10,6 +12,7 @@ class UserLogin(BaseModel):
     password: SecretStr
 
 class UserProfile(BaseModel):
+    id: int
     email: str
     weight: Optional[float] = None
     height: Optional[float] = None
@@ -19,6 +22,7 @@ class UserProfile(BaseModel):
     fitness_level: Optional[str] = None
     primary_goal: Optional[str] = None
     garmin_email: Optional[str] = None
+    current_day: Optional[int] = None
 
     class Config:
         from_attributes = True
@@ -31,11 +35,11 @@ class UserResponse(BaseModel):
     access_token: str
     token_type: str
     user: UserProfile
-    last_workout: Optional[Dict[str, Any]] = None
+    last_workout: Optional[WorkoutPlanResponse] = None
 
 class UserMeResponse(BaseModel):
     profile: UserProfile
-    last_workout: Optional[Dict[str, Any]] = None
+    last_workout: Optional[WorkoutPlanResponse] = None
 
 class SupportedExerciseBase(BaseModel):
     name: str
@@ -51,3 +55,25 @@ class SupportedExerciseResponse(SupportedExerciseBase):
 
     class Config:
         from_attributes = True
+
+class WeightHistoryEntry(BaseModel):
+    date: date
+    weight: float
+
+class CompletionStats(BaseModel):
+    total_planned: int
+    total_completed: int
+    completion_rate: float
+
+class PerformanceTrend(BaseModel):
+    exercise_name: str
+    improvement_percentage: float
+    last_weight: Optional[float] = None
+    best_weight: Optional[float] = None
+
+class UserStatisticsResponse(BaseModel):
+    weight_history: List[WeightHistoryEntry]
+    workout_completion: CompletionStats
+    strength_trends: List[PerformanceTrend]
+    total_activities_count: int
+    total_calories_burned: float

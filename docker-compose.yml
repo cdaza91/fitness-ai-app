@@ -8,7 +8,7 @@ services:
     container_name: fitcheck-backend
     restart: unless-stopped
     env_file:
-      - ./backend/.env
+      - .env
     environment:
       - DATABASE_URL=postgresql+psycopg2://fitcheck:fitcheck@db:5432/fitcheck
       - REDIS_URL=redis://redis:6379/0
